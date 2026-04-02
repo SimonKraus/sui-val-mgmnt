@@ -23,6 +23,12 @@ export function registerSuiCommands(program: Command) {
       )
       .requiredOption("--rpc-url <url>", "Sui RPC URL")
       .option("--swap-to <coinType>", "Coin type to swap to (defaults to USDC)")
+      .option(
+        "--batch-size <size>",
+        "Number of stake objects to claim per transaction",
+        parseInt,
+        100
+      )
   ).action(claimValidatorCommission);
 
   addSignerOptions(
@@ -51,6 +57,7 @@ async function claimValidatorCommission({
   rpcUrl,
   swapTo,
   swapSlippage = 0.01,
+  batchSize = 100,
   ledger,
   ledgerPath,
 }: {
@@ -58,11 +65,17 @@ async function claimValidatorCommission({
   rpcUrl: string;
   swapTo?: string;
   swapSlippage?: number;
+  batchSize?: number;
 } & SignerOptions) {
+  if (!Number.isInteger(batchSize) || batchSize <= 0) {
+    throw new Error("--batch-size must be a positive integer.");
+  }
+
   console.log(`RPC URL: ${rpcUrl}`);
   console.log(`Transfer to: ${transferTo}`);
   console.log(`Swap to: ${swapTo ? swapTo : "N/A"}`);
   console.log(`Swap slippage: ${(swapSlippage * 100).toFixed(2)}%`);
+  console.log(`Batch size: ${batchSize}`);
 
   const client = createSuiClient(rpcUrl);
   const signer = await createSigner({ client, ledger, ledgerPath });
@@ -83,60 +96,81 @@ async function claimValidatorCommission({
     return;
   }
 
-  let tx = new Transaction();
-  const balance = tx.moveCall({
-    target: "0x2::balance::zero",
-    arguments: [],
-    typeArguments: ["0x2::sui::SUI"],
-  });
-  for (const stakeId of stakeIds) {
-    const withdrawnBalance = tx.moveCall({
-      target: "0x3::sui_system::request_withdraw_stake_non_entry",
-      arguments: [tx.object("0x5"), tx.object(stakeId)],
-    });
-    tx.moveCall({
-      target: "0x2::balance::join",
-      arguments: [balance, withdrawnBalance],
-      typeArguments: ["0x2::sui::SUI"],
-    });
+  const stakeBatches: string[][] = [];
+  for (let index = 0; index < stakeIds.length; index += batchSize) {
+    stakeBatches.push(stakeIds.slice(index, index + batchSize));
   }
-  const coin = tx.moveCall({
-    target: "0x2::coin::from_balance",
-    arguments: [balance],
-    typeArguments: ["0x2::sui::SUI"],
-  });
+
+  let router: ReturnType<Aftermath["Router"]> | undefined;
   if (swapTo) {
     const afSdk = new Aftermath("MAINNET");
     await afSdk.init();
-    const router = afSdk.Router();
-    const coinInAmount = await extractCoinValue(
-      tx,
-      coin,
-      "0x2::sui::SUI",
-      client,
-      validatorAddress
-    );
-    const route = await router.getCompleteTradeRouteGivenAmountIn({
-      coinInType: "0x2::sui::SUI",
-      coinOutType: swapTo,
-      coinInAmount,
-    });
-    const { tx: txWithRoute, coinOutId } =
-      await router.addTransactionForCompleteTradeRoute({
-        tx,
-        completeRoute: route,
-        slippage: swapSlippage,
-        walletAddress: validatorAddress,
-        coinInId: coin,
-      });
-    if (!coinOutId) {
-      console.error("Error: coinOutId is undefined.");
-      process.exit(1);
-    }
-    tx = txWithRoute;
-    tx.transferObjects([coinOutId], transferTo);
+    router = afSdk.Router();
   }
-  await executeTransaction(client, signer, tx);
+
+  for (const [batchIndex, stakeBatch] of stakeBatches.entries()) {
+    console.log(
+      `Processing batch ${batchIndex + 1}/${stakeBatches.length} with ${stakeBatch.length} stakes`
+    );
+
+    let tx = new Transaction();
+    const balance = tx.moveCall({
+      target: "0x2::balance::zero",
+      arguments: [],
+      typeArguments: ["0x2::sui::SUI"],
+    });
+
+    for (const stakeId of stakeBatch) {
+      const withdrawnBalance = tx.moveCall({
+        target: "0x3::sui_system::request_withdraw_stake_non_entry",
+        arguments: [tx.object("0x5"), tx.object(stakeId)],
+      });
+      tx.moveCall({
+        target: "0x2::balance::join",
+        arguments: [balance, withdrawnBalance],
+        typeArguments: ["0x2::sui::SUI"],
+      });
+    }
+
+    const coin = tx.moveCall({
+      target: "0x2::coin::from_balance",
+      arguments: [balance],
+      typeArguments: ["0x2::sui::SUI"],
+    });
+
+    if (swapTo && router) {
+      const coinInAmount = await extractCoinValue(
+        tx,
+        coin,
+        "0x2::sui::SUI",
+        client,
+        validatorAddress
+      );
+      const route = await router.getCompleteTradeRouteGivenAmountIn({
+        coinInType: "0x2::sui::SUI",
+        coinOutType: swapTo,
+        coinInAmount,
+      });
+      const { tx: txWithRoute, coinOutId } =
+        await router.addTransactionForCompleteTradeRoute({
+          tx,
+          completeRoute: route,
+          slippage: swapSlippage,
+          walletAddress: validatorAddress,
+          coinInId: coin,
+        });
+      if (!coinOutId) {
+        console.error("Error: coinOutId is undefined.");
+        process.exit(1);
+      }
+      tx = txWithRoute;
+      tx.transferObjects([coinOutId], transferTo);
+    } else {
+      tx.transferObjects([coin], transferTo);
+    }
+
+    await executeTransaction(client, signer, tx);
+  }
 }
 
 async function setValidatorCommissionRate(options: {

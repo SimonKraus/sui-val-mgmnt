@@ -32,6 +32,10 @@ With Ledger:
 bun run src/cli.ts sui claim --transfer-to <address> --rpc-url <url> --ledger
 ```
 
+Optional:
+
+- `--batch-size <n>` to limit how many stake objects are claimed per transaction. Default: `100`.
+
 ## Set Validator Commission Rate
 
 ### Required Environment Variables
