@@ -1,20 +1,23 @@
 import { Transaction } from "@mysten/sui/transactions";
-import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { cleanEnv, str } from "envalid";
-import { SuiClient } from "@mysten/sui/client";
+import {
+  createSigner,
+  createSuiClient,
+  executeTransaction,
+  getSignerOptionsFromArgv,
+} from "../../src/utils.js";
 
 const env = cleanEnv(process.env, {
   DESTINATION_ADDRESS: str(),
-  SUI_PRIVATE_KEY: str(),
   SUI_RPC_URL: str(),
 });
 
-const suiClient = new SuiClient({
-  url: env.SUI_RPC_URL,
+const suiClient = createSuiClient(env.SUI_RPC_URL);
+const signer = await createSigner({
+  ...getSignerOptionsFromArgv(),
+  client: suiClient,
 });
-
-const keypair = Ed25519Keypair.fromSecretKey(env.SUI_PRIVATE_KEY);
-const validatorAddress = keypair.getPublicKey().toSuiAddress();
+const validatorAddress = signer.toSuiAddress();
 
 const stakePositions = await suiClient.getStakes({
   owner: validatorAddress,
@@ -54,9 +57,4 @@ const coin = tx.moveCall({
   typeArguments: ["0x2::sui::SUI"],
 });
 tx.transferObjects([coin], env.DESTINATION_ADDRESS);
-const result = await suiClient.signAndExecuteTransaction({
-  signer: keypair,
-  transaction: tx,
-});
-await suiClient.waitForTransaction({ digest: result.digest });
-console.log(`TX Digest: ${result.digest}`);
+await executeTransaction(suiClient, signer, tx);

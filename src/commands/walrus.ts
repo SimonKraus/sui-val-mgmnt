@@ -2,38 +2,36 @@ import type { Command } from "commander";
 import { Transaction } from "@mysten/sui/transactions";
 import { cleanEnv, str } from "envalid";
 import { extractCoinValue } from "../utils";
-import { createSuiClient, createKeypair, executeTransaction } from "../utils";
+import { createSuiClient, createSigner, executeTransaction } from "../utils";
 import { COIN_TYPES, PACKAGE_IDS } from "../constants";
+import { addSignerOptions, type SignerOptions } from "./utils.js";
 
 export function registerWalrusCommands(program: Command) {
   const walrus = program
     .command("walrus")
     .description("Walrus storage node operations");
 
-  walrus
-    .command("claim")
-    .description("Claim storage node commission")
-    .action(claimStorageNodeCommission);
+  addSignerOptions(
+    walrus.command("claim").description("Claim storage node commission")
+  ).action(claimStorageNodeCommission);
 }
 
 async function claimStorageNodeCommission(
-  walrusStorageNodeId: string,
-  network: "mainnet" | "testnet"
+  { ledger, ledgerPath }: SignerOptions
 ) {
   const env = cleanEnv(process.env, {
     DESTINATION_ADDRESS: str(),
-    SUI_PRIVATE_KEY: str(),
     SUI_RPC_URL: str(),
     WALRUS_PACKAGE_ID: str(),
     WALRUS_STAKING_PACKAGE_ID: str(),
     WALRUS_STORAGE_NODE_ID: str(),
   });
 
-  const walrusPackageId = PACKAGE_IDS.WALRUS[network];
-  const walrusStakingPackageId = PACKAGE_IDS.WALRUS_STAKING[network];
+  const walrusPackageId = PACKAGE_IDS.WALRUS.mainnet;
+  const walrusStakingPackageId = PACKAGE_IDS.WALRUS_STAKING.mainnet;
 
   const client = createSuiClient(env.SUI_RPC_URL);
-  const keypair = createKeypair(env.SUI_PRIVATE_KEY);
+  const signer = await createSigner({ client, ledger, ledgerPath });
 
   const tx = new Transaction();
   const auth = tx.moveCall({
@@ -45,19 +43,19 @@ async function claimStorageNodeCommission(
     target: `${walrusPackageId}::staking::collect_commission`,
     arguments: [
       tx.object(walrusStakingPackageId),
-      tx.object(walrusStorageNodeId),
+      tx.object(env.WALRUS_STORAGE_NODE_ID),
       auth,
     ],
     typeArguments: [],
   });
-  const coinInAmount = await extractCoinValue(
+  await extractCoinValue(
     tx,
     commissionCoin,
     COIN_TYPES.WAL.mainnet,
     client,
-    keypair.getPublicKey().toSuiAddress()
+    signer.toSuiAddress()
   );
   tx.transferObjects([commissionCoin], env.DESTINATION_ADDRESS);
 
-  await executeTransaction(client, keypair, tx);
+  await executeTransaction(client, signer, tx);
 }
