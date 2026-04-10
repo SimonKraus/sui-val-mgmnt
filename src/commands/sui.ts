@@ -26,7 +26,7 @@ export function registerSuiCommands(program: Command) {
       .option(
         "--batch-size <size>",
         "Number of stake objects to claim per transaction",
-        parseInt,
+        (value) => Number.parseInt(value, 10),
         100
       )
   ).action(claimValidatorCommission);
