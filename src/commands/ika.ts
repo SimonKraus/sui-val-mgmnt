@@ -26,6 +26,8 @@ async function claimValidatorCommission() {
     SUI_RPC_URL: str(),
   });
 
+  console.log(`IKA_PACKAGE_ID: ${env.IKA_PACKAGE_ID}`);
+
   const client = createSuiClient(env.SUI_RPC_URL);
   const keypair = createKeypair(env.SUI_PRIVATE_KEY);
   console.log(`Sui Address: ${keypair.getPublicKey().toSuiAddress()}`);
@@ -46,6 +48,5 @@ async function claimValidatorCommission() {
     typeArguments: [],
   });
   tx.transferObjects([commissionCoin], env.DESTINATION_ADDRESS);
-
   await executeTransaction(client, keypair, tx);
 }
