@@ -132,6 +132,8 @@ async function claimValidatorCommission({
     }
     tx = txWithRoute;
     tx.transferObjects([coinOutId], transferTo);
+  } else {
+    tx.transferObjects([coin], transferTo);
   }
   await executeTransaction(client, keypair, tx);
 }

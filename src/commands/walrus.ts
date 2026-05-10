@@ -24,8 +24,6 @@ async function claimStorageNodeCommission(
     DESTINATION_ADDRESS: str(),
     SUI_PRIVATE_KEY: str(),
     SUI_RPC_URL: str(),
-    WALRUS_PACKAGE_ID: str(),
-    WALRUS_STAKING_PACKAGE_ID: str(),
     WALRUS_STORAGE_NODE_ID: str(),
   });
 

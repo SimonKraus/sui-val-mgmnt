@@ -5,10 +5,10 @@ import { SuiClient } from "@mysten/sui/client";
 
 const env = cleanEnv(process.env, {
   DESTINATION_ADDRESS: str(),
-  SUI_PRIVATE_KEY: str(),
+  SUI_PRIVATE_KEY_GOVERNANCE: str(),
   SUI_RPC_URL: str(),
   WALRUS_PACKAGE_ID: str(),
-  WALRUS_STAKING_PACKAGE_ID: str(),
+  WALRUS_STAKING_OBJECT_ID: str(),
   WALRUS_STORAGE_NODE_ID: str(),
 });
 
@@ -16,7 +16,8 @@ const suiClient = new SuiClient({
   url: env.SUI_RPC_URL,
 });
 
-const keypair = Ed25519Keypair.fromSecretKey(env.SUI_PRIVATE_KEY);
+const keypair = Ed25519Keypair.fromSecretKey(env.SUI_PRIVATE_KEY_GOVERNANCE.trim().toLowerCase());
+console.log(`Sui Address: ${keypair.getPublicKey().toSuiAddress()}`);
 
 const tx = new Transaction();
 const auth = tx.moveCall({
@@ -27,13 +28,14 @@ const auth = tx.moveCall({
 const commissionCoin = tx.moveCall({
   target: `${env.WALRUS_PACKAGE_ID}::staking::collect_commission`,
   arguments: [
-    tx.object(env.WALRUS_STAKING_PACKAGE_ID),
+    tx.object(env.WALRUS_STAKING_OBJECT_ID),
     tx.object(env.WALRUS_STORAGE_NODE_ID),
     auth,
   ],
   typeArguments: [],
 });
 tx.transferObjects([commissionCoin], env.DESTINATION_ADDRESS);
+tx.setGasBudget(1_000_000_000);
 const result = await suiClient.signAndExecuteTransaction({
   signer: keypair,
   transaction: tx,
