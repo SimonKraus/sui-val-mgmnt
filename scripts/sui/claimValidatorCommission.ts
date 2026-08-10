@@ -1,7 +1,11 @@
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { cleanEnv, str } from "envalid";
-import { SuiClient } from "@mysten/sui/client";
+import {
+  createSuiClient,
+  executeTransaction,
+  getOwnedStakedSuiIds,
+} from "../../src/utils.js";
 
 const env = cleanEnv(process.env, {
   DESTINATION_ADDRESS: str(),
@@ -9,23 +13,13 @@ const env = cleanEnv(process.env, {
   SUI_RPC_URL: str(),
 });
 
-const suiClient = new SuiClient({
-  url: env.SUI_RPC_URL,
-});
+const suiClient = createSuiClient(env.SUI_RPC_URL);
 
 const keypair = Ed25519Keypair.fromSecretKey(env.SUI_PRIVATE_KEY);
 const validatorAddress = keypair.getPublicKey().toSuiAddress();
 
-const stakePositions = await suiClient.getStakes({
-  owner: validatorAddress,
-});
-const stakeIds = [];
-for (const stakePosition of stakePositions) {
-  console.log(`Found ${stakePosition.stakes.length} stakes`);
-  for (const stake of stakePosition.stakes) {
-    stakeIds.push(stake.stakedSuiId);
-  }
-}
+const stakeIds = await getOwnedStakedSuiIds(suiClient, validatorAddress);
+console.log(`Found ${stakeIds.length} stakes`);
 if (stakeIds.length === 0) {
   console.log(`No stakes found for ${validatorAddress}`);
   process.exit(0);
@@ -54,9 +48,4 @@ const coin = tx.moveCall({
   typeArguments: ["0x2::sui::SUI"],
 });
 tx.transferObjects([coin], env.DESTINATION_ADDRESS);
-const result = await suiClient.signAndExecuteTransaction({
-  signer: keypair,
-  transaction: tx,
-});
-await suiClient.waitForTransaction({ digest: result.digest });
-console.log(`TX Digest: ${result.digest}`);
+await executeTransaction(suiClient, keypair, tx);

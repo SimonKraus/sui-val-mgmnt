@@ -5,10 +5,10 @@ import {
   createSuiClient,
   createKeypair,
   executeTransaction,
+  getOwnedStakedSuiIds,
 } from "../utils.js";
 import { Aftermath } from "aftermath-ts-sdk";
-import { extractCoinValue } from "../utils";
-import { COIN_TYPES } from "../constants";
+import { extractCoinValue } from "../utils.js";
 
 export function registerSuiCommands(program: Command) {
   const sui = program.command("sui").description("Sui validator operations");
@@ -65,15 +65,8 @@ async function claimValidatorCommission({
   const keypair = createKeypair(env.SUI_PRIVATE_KEY);
   const validatorAddress = keypair.getPublicKey().toSuiAddress();
 
-  const stakePositions = await client.getStakes({ owner: validatorAddress });
-  const stakeIds: string[] = [];
-
-  for (const stakePosition of stakePositions) {
-    console.log(`Found ${stakePosition.stakes.length} stakes`);
-    for (const stake of stakePosition.stakes) {
-      stakeIds.push(stake.stakedSuiId);
-    }
-  }
+  const stakeIds = await getOwnedStakedSuiIds(client, validatorAddress);
+  console.log(`Found ${stakeIds.length} stakes`);
 
   if (stakeIds.length === 0) {
     console.log(`No stakes found for ${validatorAddress}`);
@@ -103,8 +96,10 @@ async function claimValidatorCommission({
     typeArguments: ["0x2::sui::SUI"],
   });
   if (swapTo) {
-    const afSdk = new Aftermath("MAINNET");
-    await afSdk.init();
+    const afSdk = await Aftermath.create({
+      network: "MAINNET",
+      fullnodeUrl: rpcUrl,
+    });
     const router = afSdk.Router();
     const coinInAmount = await extractCoinValue(
       tx,

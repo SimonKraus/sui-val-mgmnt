@@ -1,7 +1,7 @@
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { cleanEnv, str } from "envalid";
-import { SuiClient } from "@mysten/sui/client";
+import { createSuiClient, executeTransaction } from "../../src/utils.js";
 
 const env = cleanEnv(process.env, {
   DESTINATION_ADDRESS: str(),
@@ -12,9 +12,7 @@ const env = cleanEnv(process.env, {
   SUI_RPC_URL: str(),
 });
 
-const suiClient = new SuiClient({
-  url: env.SUI_RPC_URL,
-});
+const suiClient = createSuiClient(env.SUI_RPC_URL);
 
 const keypair = Ed25519Keypair.fromSecretKey(env.SUI_PRIVATE_KEY);
 console.log(`Sui Address: ${keypair.getPublicKey().toSuiAddress()}`);
@@ -35,9 +33,4 @@ const commissionCoin = tx.moveCall({
   typeArguments: [],
 });
 tx.transferObjects([commissionCoin], env.DESTINATION_ADDRESS);
-const result = await suiClient.signAndExecuteTransaction({
-  signer: keypair,
-  transaction: tx,
-});
-await suiClient.waitForTransaction({ digest: result.digest });
-console.log(`TX Digest: ${result.digest}`);
+await executeTransaction(suiClient, keypair, tx);
