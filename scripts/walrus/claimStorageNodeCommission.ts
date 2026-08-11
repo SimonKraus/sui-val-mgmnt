@@ -27,7 +27,7 @@ const commissionCoin = tx.moveCall({
   target: `${env.WALRUS_PACKAGE_ID}::staking::collect_commission`,
   arguments: [
     tx.object(env.WALRUS_STAKING_OBJECT_ID),
-    tx.object(env.WALRUS_STORAGE_NODE_ID),
+    tx.pure.id(env.WALRUS_STORAGE_NODE_ID),
     auth,
   ],
   typeArguments: [],
