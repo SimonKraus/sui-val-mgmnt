@@ -2,24 +2,34 @@ import type { SuiClientTypes } from "@mysten/sui/client";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { Transaction } from "@mysten/sui/transactions";
-import { cleanEnv, str } from "envalid";
 import type { TransactionResult } from "@mysten/sui/transactions";
 import { bcs } from "@mysten/bcs";
+import { InvalidArgumentError } from "commander";
 
 const STAKED_SUI_TYPE = "0x3::staking_pool::StakedSui";
+const SUI_NETWORKS = ["mainnet", "testnet", "devnet", "localnet"] as const;
 
-export function getBaseEnv() {
-  return cleanEnv(process.env, {
-    SUI_PRIVATE_KEY: str(),
-    SUI_RPC_URL: str(),
-  });
+export function getRequiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
 }
 
-function inferSuiNetwork(baseUrl: string): SuiClientTypes.Network {
-  const configuredNetwork = process.env.SUI_NETWORK?.trim().toLowerCase();
-  if (configuredNetwork) {
-    return configuredNetwork;
+export function parseSuiNetwork(value: string): SuiClientTypes.Network {
+  const network = value.trim().toLowerCase();
+  if (!SUI_NETWORKS.includes(network as (typeof SUI_NETWORKS)[number])) {
+    throw new InvalidArgumentError(
+      `Invalid Sui network "${value}". Expected one of: ${SUI_NETWORKS.join(", ")}`
+    );
   }
+  return network;
+}
+
+export function inferSuiNetwork(baseUrl: string): SuiClientTypes.Network {
+  const configuredNetwork = process.env.SUI_NETWORK;
+  if (configuredNetwork) return parseSuiNetwork(configuredNetwork);
 
   try {
     const hostname = new URL(baseUrl).hostname.toLowerCase();
@@ -43,7 +53,7 @@ export function createSuiClient(
 }
 
 export function createKeypair(privateKey: string) {
-  return Ed25519Keypair.fromSecretKey(privateKey);
+  return Ed25519Keypair.fromSecretKey(privateKey.trim());
 }
 
 export async function executeTransaction(
@@ -75,11 +85,12 @@ export async function getOwnedStakedSuiIds(
   let cursor: string | null = null;
 
   do {
-    const page: SuiClientTypes.ListOwnedObjectsResponse = await client.listOwnedObjects({
-      owner,
-      type: STAKED_SUI_TYPE,
-      cursor,
-    });
+    const page: SuiClientTypes.ListOwnedObjectsResponse =
+      await client.listOwnedObjects({
+        owner,
+        type: STAKED_SUI_TYPE,
+        cursor,
+      });
     stakeIds.push(...page.objects.map((object) => object.objectId));
     cursor = page.cursor;
   } while (cursor);
