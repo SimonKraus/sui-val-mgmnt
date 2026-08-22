@@ -1,78 +1,109 @@
 # Mirai Scripts
 
-A collection of helpful scripts that we use everyday at Studio Mirai.
+Studio Mirai's frequently used command-line operations for Sui validators,
+Walrus storage nodes, and Ika validators.
 
-# Sui
+## Setup
 
-## Claim Validator Commission
+Install [Bun](https://bun.sh), clone this repository, and install dependencies:
 
-### Required Environment Variables
-
-- `DESTINATION_ADDRESS` - The address to transfer rewards to.
-- `SUI_PRIVATE_KEY` - Sui private key for the validator.
-- `SUI_RPC_URL` - Sui gRPC base URL to use for the transaction.
-
-```
-bun run scripts/sui/claimValidatorCommission.ts
+```sh
+bun install --frozen-lockfile
 ```
 
-## Set Validator Commission Rate
+All commands require a private key through an environment variable. Keep keys
+out of shell history and never commit them to this repository.
 
-### Required Environment Variables
+Run the CLI with:
 
-- `COMMISSION_RATE` - The new commission rate to set (e.g. 1000 for 10%).
-- `SUI_PRIVATE_KEY` - Sui private key for signing the transaction.
-- `SUI_RPC_URL` - Sui gRPC base URL to use for the transaction.
-
-```
-bun run scripts/sui/setValidatorCommissionRate.ts
+```sh
+bun run cli -- --help
 ```
 
-## Set Validator Gas Price
+Non-secret options can also be supplied through the environment variables named
+in each command's help output. `--network` is optional: the CLI recognizes
+common mainnet, testnet, devnet, and localnet RPC hostnames and otherwise
+defaults to mainnet.
 
-### Required Environment Variables
+## Sui validator
 
-- `GAS_PRICE` - The new gas price to set (e.g. 300 for 300 MIST).
-- `SUI_PRIVATE_KEY` - Sui private key for signing the transaction.
-- `SUI_RPC_URL` - Sui gRPC base URL to use for the transaction.
-- `VALIDATOR_OPERATION_CAP_ID` - The operation capability object ID for your validator.
+Sui commands use `SUI_PRIVATE_KEY`.
 
-```
-bun run scripts/sui/setValidatorGasPrice.ts
-```
+Claim commission rewards and transfer them:
 
-# Walrus
-
-## Claim Storage Node Commission
-
-### Required Environment Variables
-
-- `DESTINATION_ADDRESS` - The address to transfer commission rewards to.
-- `SUI_PRIVATE_KEY` - Sui private key for authorizing the transaction.
-- `SUI_RPC_URL` - Sui gRPC base URL to use for sending the transaction.
-- `WALRUS_PACKAGE_ID` - Package ID for the Walrus package.
-- `WALRUS_STAKING_PACKAGE_ID` - Package ID for the Walrus staking package.
-- `WALRUS_STORAGE_NODE_ID` - The Storage Node object ID for your node.
-
-```
-bun run scripts/walrus/claimStorageNodeCommission.ts
+```sh
+bun run cli -- sui claim \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --transfer-to 0x...
 ```
 
-# Ika
+Optionally swap claimed SUI on mainnet through Aftermath before transferring it:
 
-## Claim Validator Node Commission
-
-### Required Environment Variables
-
-- `DESTINATION_ADDRESS` - The address to which the collected commission should be sent.
-- `IKA_VALIDATOR_COMMISSION_CAP_ID` - The validator's `ValidatorCommissionCap` object ID for the Ika system.
-- `SUI_PRIVATE_KEY` - Sui private key for signing the transaction.
-- `SUI_RPC_URL` - Sui gRPC base URL to use for sending the transaction.
-
-```
-bun run scripts/ika/claimValidatorCommission.ts
+```sh
+bun run cli -- sui claim \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --transfer-to 0x... \
+  --swap-to 0x...::coin::COIN \
+  --swap-slippage 0.01
 ```
 
-`SUI_NETWORK` is optional. The scripts infer `mainnet`, `testnet`, `devnet`, or
-`localnet` from common endpoint hostnames and otherwise default to `mainnet`.
-Set `SUI_NETWORK` explicitly when using a custom endpoint.
+Set the commission rate in basis points (`1000` is 10%):
+
+```sh
+bun run cli -- sui set-commission \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --commission-rate 1000
+```
+
+Set the validator gas price in MIST:
+
+```sh
+bun run cli -- sui set-gas-price \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --gas-price 300 \
+  --validator-operation-cap-id 0x...
+```
+
+## Walrus storage node
+
+Claiming commission uses `SUI_PRIVATE_KEY_GOVERNANCE`:
+
+```sh
+bun run cli -- walrus claim \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --package-id 0x... \
+  --staking-object-id 0x... \
+  --storage-node-id 0x... \
+  --transfer-to 0x...
+```
+
+Changing commission uses `SUI_PRIVATE_KEY_OPERATOR`:
+
+```sh
+bun run cli -- walrus set-commission \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --package-id 0x... \
+  --staking-object-id 0x... \
+  --storage-node-cap-id 0x... \
+  --commission-rate 1000
+```
+
+## Ika validator
+
+Ika commands use `SUI_PRIVATE_KEY`:
+
+```sh
+bun run cli -- ika claim \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --package-id 0x... \
+  --system-id 0x... \
+  --commission-cap-id 0x... \
+  --transfer-to 0x...
+```
+
+Use `--help` at any level to see all options, including compatible environment
+variable names:
+
+```sh
+bun run cli -- walrus claim --help
+```

@@ -1,68 +1,146 @@
-import type { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import { Transaction } from "@mysten/sui/transactions";
-import { cleanEnv, str } from "envalid";
 import {
   createSuiClient,
   createKeypair,
   executeTransaction,
   getOwnedStakedSuiIds,
+  getRequiredEnv,
+  inferSuiNetwork,
+  parseSuiNetwork,
 } from "../utils.js";
 import { Aftermath } from "aftermath-ts-sdk";
 import { extractCoinValue } from "../utils.js";
+import type { SuiClientTypes } from "@mysten/sui/client";
+
+type RpcOptions = {
+  rpcUrl: string;
+  network?: SuiClientTypes.Network;
+};
+
+function parseU64(value: string): bigint {
+  if (!/^\d+$/.test(value)) {
+    throw new InvalidArgumentError("expected a non-negative integer");
+  }
+  const parsed = BigInt(value);
+  if (parsed > 18_446_744_073_709_551_615n) {
+    throw new InvalidArgumentError("value exceeds the u64 maximum");
+  }
+  return parsed;
+}
+
+function parseCommissionRate(value: string): bigint {
+  const parsed = parseU64(value);
+  if (parsed > 10_000n) {
+    throw new InvalidArgumentError("commission rate must be between 0 and 10000");
+  }
+  return parsed;
+}
+
+function parseSlippage(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new InvalidArgumentError("slippage must be between 0 and 1");
+  }
+  return parsed;
+}
+
+const commissionRateDefault = process.env.COMMISSION_RATE
+  ? parseCommissionRate(process.env.COMMISSION_RATE)
+  : undefined;
+const gasPriceDefault = process.env.GAS_PRICE
+  ? parseU64(process.env.GAS_PRICE)
+  : undefined;
+
+function withRpcOptions(command: Command) {
+  return command
+    .requiredOption(
+      "--rpc-url <url>",
+      "Sui gRPC URL (or SUI_RPC_URL)",
+      process.env.SUI_RPC_URL
+    )
+    .option(
+      "--network <network>",
+      "Sui network; inferred from the RPC URL by default",
+      parseSuiNetwork
+    );
+}
 
 export function registerSuiCommands(program: Command) {
   const sui = program.command("sui").description("Sui validator operations");
 
-  sui
-    .command("claim")
-    .description("Claim validator commission rewards")
-    .requiredOption("--transfer-to <address>", "Address to transfer rewards to")
-    .requiredOption("--rpc-url <url>", "Sui RPC URL")
-    .option("--swap-to <coinType>", "Coin type to swap to (defaults to USDC)")
+  withRpcOptions(
+    sui
+      .command("claim")
+      .description("Claim validator commission rewards")
+      .requiredOption(
+        "--transfer-to <address>",
+        "Address to transfer rewards to (or DESTINATION_ADDRESS)",
+        process.env.DESTINATION_ADDRESS
+      )
+  )
+    .option("--swap-to <coin-type>", "Coin type to swap the rewards to")
+    .option(
+      "--swap-slippage <fraction>",
+      "Maximum swap slippage as a fraction",
+      parseSlippage,
+      0.01
+    )
     .action(claimValidatorCommission);
 
-  sui
-    .command("set-commission")
-    .description("Set validator commission rate")
-    .requiredOption("--commission-rate <rate>", "Commission rate", parseFloat)
-    .requiredOption("--rpc-url <url>", "Sui RPC URL")
+  withRpcOptions(
+    sui
+      .command("set-commission")
+      .description("Set validator commission rate")
+      .requiredOption(
+        "--commission-rate <rate>",
+        "Commission rate in basis points (0-10000)",
+        parseCommissionRate,
+        commissionRateDefault
+      )
+  )
     .action(setValidatorCommissionRate);
 
-  sui
-    .command("set-gas-price")
-    .description("Set validator gas price")
-    .requiredOption("--gas-price <price>", "Gas price", parseFloat)
-    .requiredOption("--rpc-url <url>", "Sui RPC URL")
-    .requiredOption(
-      "--validator-operation-cap-id <id>",
-      "Validator operation cap ID"
-    )
+  withRpcOptions(
+    sui
+      .command("set-gas-price")
+      .description("Set validator gas price")
+      .requiredOption(
+        "--gas-price <mist>",
+        "Gas price in MIST",
+        parseU64,
+        gasPriceDefault
+      )
+      .requiredOption(
+        "--validator-operation-cap-id <id>",
+        "Validator operation cap ID (or VALIDATOR_OPERATION_CAP_ID)",
+        process.env.VALIDATOR_OPERATION_CAP_ID
+      )
+  )
     .action(setValidatorGasPrice);
 }
 
 async function claimValidatorCommission({
   transferTo,
   rpcUrl,
+  network,
   swapTo,
   swapSlippage = 0.01,
 }: {
   transferTo: string;
-  network: "mainnet" | "testnet";
+  network?: SuiClientTypes.Network;
   rpcUrl: string;
   swapTo?: string;
   swapSlippage?: number;
 }) {
-  const env = cleanEnv(process.env, {
-    SUI_PRIVATE_KEY: str(),
-  });
-
   console.log(`RPC URL: ${rpcUrl}`);
   console.log(`Transfer to: ${transferTo}`);
   console.log(`Swap to: ${swapTo ? swapTo : "N/A"}`);
   console.log(`Swap slippage: ${(swapSlippage * 100).toFixed(2)}%`);
 
-  const client = createSuiClient(rpcUrl);
-  const keypair = createKeypair(env.SUI_PRIVATE_KEY);
+  const resolvedNetwork = network ?? inferSuiNetwork(rpcUrl);
+  const client = createSuiClient(rpcUrl, resolvedNetwork);
+  const keypair = createKeypair(getRequiredEnv("SUI_PRIVATE_KEY"));
   const validatorAddress = keypair.getPublicKey().toSuiAddress();
 
   const stakeIds = await getOwnedStakedSuiIds(client, validatorAddress);
@@ -96,6 +174,9 @@ async function claimValidatorCommission({
     typeArguments: ["0x2::sui::SUI"],
   });
   if (swapTo) {
+    if (resolvedNetwork !== "mainnet") {
+      throw new Error("Reward swaps are currently supported on mainnet only");
+    }
     const afSdk = await Aftermath.create({
       network: "MAINNET",
       fullnodeUrl: rpcUrl,
@@ -134,15 +215,10 @@ async function claimValidatorCommission({
 }
 
 async function setValidatorCommissionRate(options: {
-  commissionRate: number;
-  rpcUrl: string;
-}) {
-  const env = cleanEnv(process.env, {
-    SUI_PRIVATE_KEY: str(),
-  });
-
-  const client = createSuiClient(options.rpcUrl);
-  const keypair = createKeypair(env.SUI_PRIVATE_KEY);
+  commissionRate: bigint;
+} & RpcOptions) {
+  const client = createSuiClient(options.rpcUrl, options.network);
+  const keypair = createKeypair(getRequiredEnv("SUI_PRIVATE_KEY"));
 
   const tx = new Transaction();
   tx.moveCall({
@@ -155,16 +231,11 @@ async function setValidatorCommissionRate(options: {
 }
 
 async function setValidatorGasPrice(options: {
-  gasPrice: number;
-  rpcUrl: string;
+  gasPrice: bigint;
   validatorOperationCapId: string;
-}) {
-  const env = cleanEnv(process.env, {
-    SUI_PRIVATE_KEY: str(),
-  });
-
-  const client = createSuiClient(options.rpcUrl);
-  const keypair = createKeypair(env.SUI_PRIVATE_KEY);
+} & RpcOptions) {
+  const client = createSuiClient(options.rpcUrl, options.network);
+  const keypair = createKeypair(getRequiredEnv("SUI_PRIVATE_KEY"));
 
   const tx = new Transaction();
   tx.moveCall({
