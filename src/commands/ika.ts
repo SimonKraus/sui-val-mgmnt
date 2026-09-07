@@ -1,46 +1,76 @@
 import type { Command } from "commander";
 import { Transaction } from "@mysten/sui/transactions";
-import { cleanEnv, str } from "envalid";
-import { createSuiClient, createSigner, executeTransaction } from "../utils.js";
+import {
+  createSuiClient,
+  createSigner,
+  executeTransaction,
+  parseSuiNetwork,
+} from "../utils.js";
+import type { SuiClientTypes } from "@mysten/sui/client";
 import { addSignerOptions, type SignerOptions } from "./utils.js";
 
 export function registerIkaCommands(program: Command) {
   const ika = program.command("ika").description("Ika validator operations");
 
   addSignerOptions(
-    ika.command("claim").description("Claim validator commission")
+    ika
+      .command("claim")
+      .description("Claim validator commission")
+      .requiredOption(
+        "--transfer-to <address>",
+        "Address to transfer rewards to (or DESTINATION_ADDRESS)",
+        process.env.DESTINATION_ADDRESS
+      )
+      .requiredOption(
+        "--rpc-url <url>",
+        "Sui gRPC URL (or SUI_RPC_URL)",
+        process.env.SUI_RPC_URL
+      )
+      .option(
+        "--network <network>",
+        "Sui network; inferred from the RPC URL by default",
+        parseSuiNetwork
+      )
+      .requiredOption(
+        "--package-id <id>",
+        "Ika package ID (or IKA_PACKAGE_ID)",
+        process.env.IKA_PACKAGE_ID
+      )
+      .requiredOption(
+        "--system-id <id>",
+        "Ika system object ID (or IKA_SYSTEM_ID)",
+        process.env.IKA_SYSTEM_ID
+      )
+      .requiredOption(
+        "--commission-cap-id <id>",
+        "ValidatorCommissionCap object ID (or IKA_VALIDATOR_COMMISSION_CAP_ID)",
+        process.env.IKA_VALIDATOR_COMMISSION_CAP_ID
+      )
   ).action(claimValidatorCommission);
 }
 
-async function claimValidatorCommission({ ledger, ledgerPath }: SignerOptions) {
-  const env = cleanEnv(process.env, {
-    DESTINATION_ADDRESS: str(),
-    IKA_PACKAGE_ID: str(),
-    IKA_SYSTEM_ID: str(),
-    IKA_VALIDATOR_COMMISSION_CAP_ID: str(),
-    SUI_RPC_URL: str(),
-  });
-
-  const client = createSuiClient(env.SUI_RPC_URL);
-  const signer = await createSigner({ client, ledger, ledgerPath });
+async function claimValidatorCommission(options: {
+  transferTo: string;
+  rpcUrl: string;
+  network?: SuiClientTypes.Network;
+  packageId: string;
+  systemId: string;
+  commissionCapId: string;
+} & SignerOptions) {
+  const client = createSuiClient(options.rpcUrl, options.network);
+  const signer = await createSigner({ client, ...options });
   console.log(`Sui Address: ${signer.toSuiAddress()}`);
 
   const tx = new Transaction();
-  const amount = tx.moveCall({
-    target: "0x1::option::none",
-    arguments: [],
-    typeArguments: ["u64"],
-  });
   const commissionCoin = tx.moveCall({
-    target: `${env.IKA_PACKAGE_ID}::system::collect_commission`,
+    target: `${options.packageId}::system::collect_commission`,
     arguments: [
-      tx.object(env.IKA_SYSTEM_ID),
-      tx.object(env.IKA_VALIDATOR_COMMISSION_CAP_ID),
-      amount,
+      tx.object(options.systemId),
+      tx.object(options.commissionCapId),
+      tx.pure.option("u64", null),
     ],
     typeArguments: [],
   });
-  tx.transferObjects([commissionCoin], env.DESTINATION_ADDRESS);
-
+  tx.transferObjects([commissionCoin], options.transferTo);
   await executeTransaction(client, signer, tx);
 }

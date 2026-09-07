@@ -1,60 +1,139 @@
-import type { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import { Transaction } from "@mysten/sui/transactions";
 import {
   createSuiClient,
   createSigner,
   executeTransaction,
+  getOwnedStakedSuiIds,
+  inferSuiNetwork,
+  parseSuiNetwork,
 } from "../utils.js";
 import { Aftermath } from "aftermath-ts-sdk";
-import { extractCoinValue } from "../utils";
-import { COIN_TYPES } from "../constants";
+import { extractCoinValue } from "../utils.js";
+import type { SuiClientTypes } from "@mysten/sui/client";
 import { addSignerOptions, type SignerOptions } from "./utils.js";
+
+type RpcOptions = {
+  rpcUrl: string;
+  network?: SuiClientTypes.Network;
+};
+
+function parseU64(value: string): bigint {
+  if (!/^\d+$/.test(value)) {
+    throw new InvalidArgumentError("expected a non-negative integer");
+  }
+  const parsed = BigInt(value);
+  if (parsed > 18_446_744_073_709_551_615n) {
+    throw new InvalidArgumentError("value exceeds the u64 maximum");
+  }
+  return parsed;
+}
+
+function parseCommissionRate(value: string): bigint {
+  const parsed = parseU64(value);
+  if (parsed > 10_000n) {
+    throw new InvalidArgumentError("commission rate must be between 0 and 10000");
+  }
+  return parsed;
+}
+
+function parseSlippage(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new InvalidArgumentError("slippage must be between 0 and 1");
+  }
+  return parsed;
+}
+
+const commissionRateDefault = process.env.COMMISSION_RATE
+  ? parseCommissionRate(process.env.COMMISSION_RATE)
+  : undefined;
+const gasPriceDefault = process.env.GAS_PRICE
+  ? parseU64(process.env.GAS_PRICE)
+  : undefined;
+
+function withRpcOptions(command: Command) {
+  return command
+    .requiredOption(
+      "--rpc-url <url>",
+      "Sui gRPC URL (or SUI_RPC_URL)",
+      process.env.SUI_RPC_URL
+    )
+    .option(
+      "--network <network>",
+      "Sui network; inferred from the RPC URL by default",
+      parseSuiNetwork
+    );
+}
 
 export function registerSuiCommands(program: Command) {
   const sui = program.command("sui").description("Sui validator operations");
 
   addSignerOptions(
-    sui
-      .command("claim")
-      .description("Claim validator commission rewards")
-      .requiredOption(
-        "--transfer-to <address>",
-        "Address to transfer rewards to"
-      )
-      .requiredOption("--rpc-url <url>", "Sui RPC URL")
-      .option("--swap-to <coinType>", "Coin type to swap to (defaults to USDC)")
-      .option(
-        "--batch-size <size>",
-        "Number of stake objects to claim per transaction",
-        (value) => Number.parseInt(value, 10),
-        100
-      )
-  ).action(claimValidatorCommission);
+    withRpcOptions(
+      sui
+        .command("claim")
+        .description("Claim validator commission rewards")
+        .requiredOption(
+          "--transfer-to <address>",
+          "Address to transfer rewards to (or DESTINATION_ADDRESS)",
+          process.env.DESTINATION_ADDRESS
+        )
+    )
+  )
+    .option("--swap-to <coin-type>", "Coin type to swap the rewards to")
+    .option(
+      "--swap-slippage <fraction>",
+      "Maximum swap slippage as a fraction",
+      parseSlippage,
+      0.01
+    )
+    .option(
+      "--batch-size <size>",
+      "Number of stake objects to claim per transaction",
+      (value) => Number.parseInt(value, 10),
+      100
+    )
+    .action(claimValidatorCommission);
 
   addSignerOptions(
-    sui
-      .command("set-commission")
-      .description("Set validator commission rate")
-      .requiredOption("--commission-rate <rate>", "Commission rate", parseFloat)
-      .requiredOption("--rpc-url <url>", "Sui RPC URL")
+    withRpcOptions(
+      sui
+        .command("set-commission")
+        .description("Set validator commission rate")
+        .requiredOption(
+          "--commission-rate <rate>",
+          "Commission rate in basis points (0-10000)",
+          parseCommissionRate,
+          commissionRateDefault
+        )
+    )
   ).action(setValidatorCommissionRate);
 
   addSignerOptions(
-    sui
-      .command("set-gas-price")
-      .description("Set validator gas price")
-      .requiredOption("--gas-price <price>", "Gas price", parseFloat)
-      .requiredOption("--rpc-url <url>", "Sui RPC URL")
-      .requiredOption(
-        "--validator-operation-cap-id <id>",
-        "Validator operation cap ID"
-      )
+    withRpcOptions(
+      sui
+        .command("set-gas-price")
+        .description("Set validator gas price")
+        .requiredOption(
+          "--gas-price <mist>",
+          "Gas price in MIST",
+          parseU64,
+          gasPriceDefault
+        )
+        .requiredOption(
+          "--validator-operation-cap-id <id>",
+          "Validator operation cap ID (or VALIDATOR_OPERATION_CAP_ID)",
+          process.env.VALIDATOR_OPERATION_CAP_ID
+        )
+    )
   ).action(setValidatorGasPrice);
 }
 
 async function claimValidatorCommission({
   transferTo,
   rpcUrl,
+  network,
   swapTo,
   swapSlippage = 0.01,
   batchSize = 100,
@@ -62,6 +141,7 @@ async function claimValidatorCommission({
   ledgerPath,
 }: {
   transferTo: string;
+  network?: SuiClientTypes.Network;
   rpcUrl: string;
   swapTo?: string;
   swapSlippage?: number;
@@ -77,40 +157,38 @@ async function claimValidatorCommission({
   console.log(`Swap slippage: ${(swapSlippage * 100).toFixed(2)}%`);
   console.log(`Batch size: ${batchSize}`);
 
-  const client = createSuiClient(rpcUrl);
+  const resolvedNetwork = network ?? inferSuiNetwork(rpcUrl);
+  const client = createSuiClient(rpcUrl, resolvedNetwork);
   const signer = await createSigner({ client, ledger, ledgerPath });
   const validatorAddress = signer.toSuiAddress();
 
-  const stakePositions = await client.getStakes({ owner: validatorAddress });
-  const stakeIds: string[] = [];
-
-  for (const stakePosition of stakePositions) {
-    console.log(`Found ${stakePosition.stakes.length} stakes`);
-    for (const stake of stakePosition.stakes) {
-      stakeIds.push(stake.stakedSuiId);
-    }
-  }
+  const stakeIds = await getOwnedStakedSuiIds(client, validatorAddress);
+  console.log(`Found ${stakeIds.length} stakes`);
 
   if (stakeIds.length === 0) {
     console.log(`No stakes found for ${validatorAddress}`);
     return;
   }
 
-  const stakeBatches: string[][] = [];
-  for (let index = 0; index < stakeIds.length; index += batchSize) {
-    stakeBatches.push(stakeIds.slice(index, index + batchSize));
+  if (swapTo && resolvedNetwork !== "mainnet") {
+    throw new Error("Reward swaps are currently supported on mainnet only");
   }
 
-  let router: ReturnType<Aftermath["Router"]> | undefined;
-  if (swapTo) {
-    const afSdk = new Aftermath("MAINNET");
-    await afSdk.init();
-    router = afSdk.Router();
-  }
+  const router = swapTo
+    ? (
+        await Aftermath.create({
+          network: "MAINNET",
+          fullnodeUrl: rpcUrl,
+        })
+      ).Router()
+    : undefined;
 
-  for (const [batchIndex, stakeBatch] of stakeBatches.entries()) {
+  for (let offset = 0; offset < stakeIds.length; offset += batchSize) {
+    const stakeBatch = stakeIds.slice(offset, offset + batchSize);
+    const batchNumber = Math.floor(offset / batchSize) + 1;
+    const batchCount = Math.ceil(stakeIds.length / batchSize);
     console.log(
-      `Processing batch ${batchIndex + 1}/${stakeBatches.length} with ${stakeBatch.length} stakes`
+      `Processing batch ${batchNumber}/${batchCount} with ${stakeBatch.length} stakes`
     );
 
     let tx = new Transaction();
@@ -119,7 +197,6 @@ async function claimValidatorCommission({
       arguments: [],
       typeArguments: ["0x2::sui::SUI"],
     });
-
     for (const stakeId of stakeBatch) {
       const withdrawnBalance = tx.moveCall({
         target: "0x3::sui_system::request_withdraw_stake_non_entry",
@@ -131,7 +208,6 @@ async function claimValidatorCommission({
         typeArguments: ["0x2::sui::SUI"],
       });
     }
-
     const coin = tx.moveCall({
       target: "0x2::coin::from_balance",
       arguments: [balance],
@@ -160,8 +236,7 @@ async function claimValidatorCommission({
           coinInId: coin,
         });
       if (!coinOutId) {
-        console.error("Error: coinOutId is undefined.");
-        process.exit(1);
+        throw new Error("Aftermath did not return an output coin");
       }
       tx = txWithRoute;
       tx.transferObjects([coinOutId], transferTo);
@@ -174,11 +249,10 @@ async function claimValidatorCommission({
 }
 
 async function setValidatorCommissionRate(options: {
-  commissionRate: number;
-  rpcUrl: string;
-} & SignerOptions) {
-  const client = createSuiClient(options.rpcUrl);
-  const signer = await createSigner({ ...options, client });
+  commissionRate: bigint;
+} & RpcOptions & SignerOptions) {
+  const client = createSuiClient(options.rpcUrl, options.network);
+  const signer = await createSigner({ client, ...options });
 
   const tx = new Transaction();
   tx.moveCall({
@@ -191,12 +265,11 @@ async function setValidatorCommissionRate(options: {
 }
 
 async function setValidatorGasPrice(options: {
-  gasPrice: number;
-  rpcUrl: string;
+  gasPrice: bigint;
   validatorOperationCapId: string;
-} & SignerOptions) {
-  const client = createSuiClient(options.rpcUrl);
-  const signer = await createSigner({ ...options, client });
+} & RpcOptions & SignerOptions) {
+  const client = createSuiClient(options.rpcUrl, options.network);
+  const signer = await createSigner({ client, ...options });
 
   const tx = new Transaction();
   tx.moveCall({

@@ -1,114 +1,127 @@
 # Mirai Scripts
 
-A collection of CLI commands and helper scripts for Sui, Ika, and Walrus validator operations.
+Studio Mirai's frequently used command-line operations for Sui validators,
+Walrus storage nodes, and Ika validators.
 
-## Signing Modes
+## Setup
 
-The CLI now supports two signing modes:
+Install [Bun](https://bun.sh), clone this repository, and install dependencies:
 
-- Private key: provide `SUI_PRIVATE_KEY`.
-- Ledger: pass `--ledger` and connect an unlocked Ledger running the Sui app.
-
-Optional Ledger flags:
-
-- `--ledger-path <path>` to override the default derivation path `m/44'/784'/0'/0'/0'`.
-
-# Sui
-
-## Claim Validator Commission
-
-### Required Environment Variables
-
-- `DESTINATION_ADDRESS` - The address to transfer rewards to.
-- `SUI_RPC_URL` - Sui RPC URL to use for the transaction.
-
-```
-bun run src/cli.ts sui claim --transfer-to <address> --rpc-url <url>
+```sh
+bun install --frozen-lockfile
 ```
 
-With Ledger:
+Commands can sign with a private key supplied through the environment variable
+documented below, or with a connected Ledger. Keep private keys out of shell
+history and never commit them to this repository.
 
-```
-bun run src/cli.ts sui claim --transfer-to <address> --rpc-url <url> --ledger
-```
+Run the CLI with:
 
-Optional:
-
-- `--batch-size <n>` to limit how many stake objects are claimed per transaction. Default: `100`.
-
-## Set Validator Commission Rate
-
-### Required Environment Variables
-
-- `COMMISSION_RATE` - The new commission rate to set (e.g. 1000 for 10%).
-- `SUI_RPC_URL` - Sui RPC URL to use for the transaction.
-
-```
-bun run src/cli.ts sui set-commission --commission-rate <rate> --rpc-url <url>
+```sh
+bun run cli -- --help
 ```
 
-With Ledger:
+Non-secret options can also be supplied through the environment variables named
+in each command's help output. `--network` is optional: the CLI recognizes
+common mainnet, testnet, devnet, and localnet RPC hostnames and otherwise
+defaults to mainnet.
 
-```
-bun run src/cli.ts sui set-commission --commission-rate <rate> --rpc-url <url> --ledger
-```
+To sign any command with an unlocked Ledger running the Sui app, add `--ledger`.
+The default derivation path is `m/44'/784'/0'/0'/0'`; override it with
+`--ledger-path <path>` when needed. The command's private-key environment
+variable is not required in Ledger mode.
 
-## Set Validator Gas Price
+## Sui validator
 
-### Required Environment Variables
+Sui commands use `SUI_PRIVATE_KEY`.
 
-- `GAS_PRICE` - The new gas price to set (e.g. 300 for 300 MIST).
-- `SUI_RPC_URL` - Sui RPC URL to use for the transaction.
-- `VALIDATOR_OPERATION_CAP_ID` - The operation capability object ID for your validator.
+Claim commission rewards and transfer them:
 
-```
-bun run src/cli.ts sui set-gas-price --gas-price <price> --rpc-url <url> --validator-operation-cap-id <id>
-```
-
-With Ledger:
-
-```
-bun run src/cli.ts sui set-gas-price --gas-price <price> --rpc-url <url> --validator-operation-cap-id <id> --ledger
+```sh
+bun run cli -- sui claim \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --transfer-to 0x...
 ```
 
-# Walrus
+Optionally swap claimed SUI on mainnet through Aftermath before transferring it:
 
-## Claim Storage Node Commission
-
-### Required Environment Variables
-
-- `DESTINATION_ADDRESS` - The address to transfer commission rewards to.
-- `SUI_RPC_URL` - Sui RPC URL to use for sending the transaction.
-- `WALRUS_PACKAGE_ID` - Package ID for the Walrus package.
-- `WALRUS_STAKING_PACKAGE_ID` - Package ID for the Walrus staking package.
-- `WALRUS_STORAGE_NODE_ID` - The Storage Node object ID for your node.
-
-```
-bun run src/cli.ts walrus claim
+```sh
+bun run cli -- sui claim \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --transfer-to 0x... \
+  --swap-to 0x...::coin::COIN \
+  --swap-slippage 0.01
 ```
 
-With Ledger:
+Claims are submitted in batches of 100 stake objects by default. Use
+`--batch-size <n>` to choose a different positive batch size.
 
-```
-bun run src/cli.ts walrus claim --ledger
-```
+Set the commission rate in basis points (`1000` is 10%):
 
-# Ika
-
-## Claim Validator Node Commission
-
-### Required Environment Variables
-
-- `DESTINATION_ADDRESS` - The address to which the collected commission should be sent.
-- `IKA_VALIDATOR_COMMISSION_CAP_ID` - The validator's `ValidatorCommissionCap` object ID for the Ika system.
-- `SUI_RPC_URL` - Sui RPC URL to use for sending the transaction.
-
-```
-bun run src/cli.ts ika claim
+```sh
+bun run cli -- sui set-commission \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --commission-rate 1000
 ```
 
-With Ledger:
+Set the validator gas price in MIST:
 
+```sh
+bun run cli -- sui set-gas-price \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --gas-price 300 \
+  --validator-operation-cap-id 0x...
 ```
-bun run src/cli.ts ika claim --ledger
+
+For example, to claim with Ledger:
+
+```sh
+bun run cli -- sui claim \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --transfer-to 0x... \
+  --ledger
+```
+
+## Walrus storage node
+
+Claiming commission uses `SUI_PRIVATE_KEY_GOVERNANCE`:
+
+```sh
+bun run cli -- walrus claim \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --package-id 0x... \
+  --staking-object-id 0x... \
+  --storage-node-id 0x... \
+  --transfer-to 0x...
+```
+
+Changing commission uses `SUI_PRIVATE_KEY_OPERATOR`:
+
+```sh
+bun run cli -- walrus set-commission \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --package-id 0x... \
+  --staking-object-id 0x... \
+  --storage-node-cap-id 0x... \
+  --commission-rate 1000
+```
+
+## Ika validator
+
+Ika commands use `SUI_PRIVATE_KEY`:
+
+```sh
+bun run cli -- ika claim \
+  --rpc-url https://fullnode.mainnet.sui.io:443 \
+  --package-id 0x... \
+  --system-id 0x... \
+  --commission-cap-id 0x... \
+  --transfer-to 0x...
+```
+
+Use `--help` at any level to see all options, including compatible environment
+variable names:
+
+```sh
+bun run cli -- walrus claim --help
 ```
